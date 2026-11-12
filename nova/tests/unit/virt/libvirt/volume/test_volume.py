@@ -184,6 +184,42 @@ class LibvirtVolumeTestCase(LibvirtISCSIVolumeBaseTestCase):
         self.assertIsNone(tree.find('./blockio'))
         self.assertIsNone(tree.find("driver[@discard]"))
 
+    @mock.patch('os.path.realpath', return_value='/dev/drbd1006')
+    def test_libvirt_volume_driver_extend_volume(self, mock_realpath):
+        libvirt_driver = volume.LibvirtVolumeDriver(self.fake_host)
+        connection_info = {'data': {'device_path': '/dev/drbd/by-res/r/0'}}
+        requested_size = 429496729600
+        # the device is a little larger than requested, as LINSTOR makes it
+        m_open = mock.mock_open(read_data='838861216\n')
+        with mock.patch('builtins.open', m_open):
+            new_size = libvirt_driver.extend_volume(
+                connection_info, mock.sentinel.instance, requested_size)
+        self.assertEqual(requested_size, new_size)
+        mock_realpath.assert_called_once_with('/dev/drbd/by-res/r/0')
+        m_open.assert_called_once_with('/sys/class/block/drbd1006/size')
+
+    @mock.patch('os.path.realpath', return_value='/dev/drbd1006')
+    def test_libvirt_volume_driver_extend_volume_device_smaller(
+            self, mock_realpath):
+        libvirt_driver = volume.LibvirtVolumeDriver(self.fake_host)
+        connection_info = {'data': {'device_path': '/dev/drbd/by-res/r/0'}}
+        # the device has not grown: 300 GiB of the 400 GiB requested
+        m_open = mock.mock_open(read_data='629145600\n')
+        with mock.patch('builtins.open', m_open):
+            new_size = libvirt_driver.extend_volume(
+                connection_info, mock.sentinel.instance, 429496729600)
+        self.assertEqual(322122547200, new_size)
+
+    @mock.patch('os.path.realpath', return_value='/dev/sdz')
+    def test_libvirt_volume_driver_extend_volume_no_sysfs(
+            self, mock_realpath):
+        libvirt_driver = volume.LibvirtVolumeDriver(self.fake_host)
+        connection_info = {'data': {'device_path': '/dev/sdz'}}
+        with mock.patch('builtins.open', side_effect=FileNotFoundError):
+            new_size = libvirt_driver.extend_volume(
+                connection_info, mock.sentinel.instance, 429496729600)
+        self.assertEqual(429496729600, new_size)
+
     def test_libvirt_volume_driver_blockio(self):
         libvirt_driver = volume.LibvirtVolumeDriver(self.fake_host)
         connection_info = {

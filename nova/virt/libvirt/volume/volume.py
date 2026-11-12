@@ -16,6 +16,8 @@
 
 """Volume drivers for libvirt."""
 
+import os
+
 from oslo_log import log as logging
 
 import nova.conf
@@ -170,6 +172,38 @@ class LibvirtVolumeDriver(LibvirtBaseVolumeDriver):
         conf.source_type = "block"
         conf.source_path = connection_info['data']['device_path']
         return conf
+
+    def extend_volume(self, connection_info, instance, requested_size):
+        """Return the size to grow the guest's view of the device to.
+
+        Backends that attach volumes as a local block device (for example
+        the LINSTOR cinder driver) have already grown the device on this
+        host when cinder sends the volume-extended event, so only QEMU
+        has to be told. The requested size is capped at the device's
+        current size, read from sysfs, so QEMU is never asked to grow
+        past the end of a device that has not grown.
+        """
+        device_path = connection_info['data']['device_path']
+        size_path = '/sys/class/block/%s/size' % os.path.basename(
+            os.path.realpath(device_path))
+        try:
+            with open(size_path) as f:
+                # sysfs reports the size in 512-byte sectors
+                device_size = int(f.read().strip()) * 512
+        except (OSError, ValueError) as e:
+            LOG.warning('Could not read the size of %(path)s from '
+                        '%(size_path)s, using the requested size: %(err)s',
+                        {'path': device_path, 'size_path': size_path,
+                         'err': e}, instance=instance)
+            return requested_size
+
+        if device_size < requested_size:
+            LOG.warning('Block device %(path)s is %(dev)d bytes, smaller '
+                        'than the requested %(req)d; using the device size',
+                        {'path': device_path, 'dev': device_size,
+                         'req': requested_size}, instance=instance)
+            return device_size
+        return requested_size
 
 
 class LibvirtFakeVolumeDriver(LibvirtBaseVolumeDriver):
